@@ -1,0 +1,57 @@
+[package]
+name = "hft-orderbook"
+version = "0.1.0"
+edition = "2021"
+authors = ["vnknowledge2014@gmail.com"]
+description = "High-frequency trading order book implementation in Rust"
+license = "MIT"
+
+[dependencies]
+# Core dependencies
+crossbeam = "0.8"
+dashmap = "5.4.0"
+smallvec = "1.10.0"
+parking_lot = "0.12"
+num_cpus = "1.15"
+thiserror = "1.0"
+anyhow = "1.0"
+chrono = "0.4"
+uuid = { version = "1.3", features = ["v4", "fast-rng", "serde"] }
+bytes = "1.4"
+fnv = "1.0"
+rand = "0.8"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging & metrics
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+metrics = "0.20"
+metrics-exporter-prometheus = "0.11"
+
+# CLI for simulator
+clap = { version = "4.3", features = ["derive"] }
+prettytable-rs = "0.10"
+indicatif = "0.17"
+colored = "2.2"
+
+[dev-dependencies]
+criterion = "0.4"
+rand = "0.8"
+tempfile = "3.5"
+quickcheck = "1.0"
+quickcheck_macros = "1.0"
+fake = { version = "2.5", features = ["derive"] }
+
+[[bench]]
+name = "orderbook_benchmark"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+debug = true  # Keep debug symbols for profiling
