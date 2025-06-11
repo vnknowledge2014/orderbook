@@ -2,7 +2,7 @@
 name = "hft-orderbook"
 version = "0.1.0"
 edition = "2021"
-authors = ["vnknowledge2014@gmail.com"]
+authors = ["Your Name <your.email@example.com>"]
 description = "High-frequency trading order book implementation in Rust"
 license = "MIT"
 

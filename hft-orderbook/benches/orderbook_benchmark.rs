@@ -1,9 +1,10 @@
 //! Benchmarks for the order book implementation.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
 use hft_orderbook::order_book::*;
 use hft_orderbook::matching_engine::*;
 use hft_orderbook::simulation::OrderGenerator;
+use hft_orderbook::simulation::OrderGeneratorConfig;
 
 fn create_order_book() -> OrderBook {
     let config = OrderBookConfig::default();
@@ -73,7 +74,7 @@ fn bench_order_book_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("order_book_throughput");
     
     // Create an order generator
-    let config = hft_orderbook::simulation::generator::OrderGeneratorConfig::default();
+    let config = OrderGeneratorConfig::default();
     let mut generator = OrderGenerator::new(config);
     
     // Generate orders

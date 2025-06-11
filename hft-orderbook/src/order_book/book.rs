@@ -3,8 +3,9 @@
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use crate::order_book::{
-    Order, OrderId, Price, Quantity, Timestamp, ClientId, Side, BidSide, AskSide, 
-    OrderSide, TimeInForce
+    Order, OrderId, Price, Quantity, Timestamp, ClientId, 
+    PriceLevel, Side, BidSide, AskSide, 
+    OrderSide, OrderStatus, OrderType, TimeInForce
 };
 use crate::order_book::price_level::PriceLevelData;
 
