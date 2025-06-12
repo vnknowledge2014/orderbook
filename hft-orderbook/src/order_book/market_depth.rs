@@ -1,5 +1,5 @@
 use serde::{Serialize, Deserialize};
-use crate::order_book::{Price, Quantity, OrderSide, OrderBook};
+use crate::order_book::{Price, Quantity, OrderSide};
 
 /// Dữ liệu market depth (độ sâu thị trường)
 #[derive(Debug, Clone, Serialize, Deserialize)]

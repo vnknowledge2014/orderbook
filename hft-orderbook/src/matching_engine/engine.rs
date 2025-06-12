@@ -116,6 +116,12 @@ impl MatchingEngine {
         self.order_book.cancel_order(order_id).map_err(|e| anyhow::anyhow!(e.to_string()))
     }
     
+    /// Get a reference to the order book
+    #[inline]
+    pub fn get_book(&self) -> &OrderBook {
+        &self.order_book
+    }
+    
     /// Match an order
     #[inline]
     fn match_order(&mut self, order: Order) -> anyhow::Result<MatchResult> {

@@ -145,15 +145,6 @@ impl BookSide {
         };
     }
 
-    /// Lấy giá tệ nhất trên side này
-    #[inline]
-    pub fn get_worst_price(&self) -> Option<Price> {
-        match self.side_type {
-            OrderSide::Buy => self.price_levels.keys().next().copied(),
-            OrderSide::Sell => self.price_levels.keys().rev().next().copied(),
-        }
-    }
-
     /// Lấy số lượng mức giá trong một khoảng giá
     #[inline]
     pub fn count_levels_in_range(&self, min_price: Price, max_price: Price) -> usize {
@@ -220,7 +211,7 @@ impl BookSide {
 
         if price_range == 0 {
             // Chỉ có một mức giá
-            return vec![(best, self.total_volume())];
+            return vec![(best, self.total_volume)];
         }
 
         let bucket_size = (price_range / num_buckets as u64).max(1) as i64;
@@ -273,12 +264,12 @@ impl BookSide {
         }
 
         // Tính tổng khối lượng
-        let total_volume = self.total_volume();
+        let total_vol = self.total_volume;
 
         // Tính độ dốc (volume / price range)
         match self.side_type {
-            OrderSide::Buy => total_volume / (best_price - worst_price).abs(),
-            OrderSide::Sell => total_volume / (worst_price - best_price).abs(),
+            OrderSide::Buy => total_vol / (best_price - worst_price).abs(),
+            OrderSide::Sell => total_vol / (worst_price - best_price).abs(),
         }
     }
 

@@ -32,6 +32,10 @@ DURATION=60
 OUTPUT=""
 BENCHMARK=false
 REPORT=false
+MARKET_DEPTH=false
+MARKET_DEPTH_INTERVAL=1000
+MARKET_IMPACT_SIZES=""
+COMMAND="simulate"
 
 print_usage() {
     echo -e "\nUsage: $0 [options]"
@@ -41,9 +45,15 @@ print_usage() {
     echo -e "  -o, --output FILE    Output file for results"
     echo -e "  -b, --benchmark      Run benchmark instead of simulation"
     echo -e "  -r, --report         Generate HTML report after run"
+    echo -e "  -m, --market-depth   Enable market depth analysis"
+    echo -e "  -i, --interval MS    Market depth sample interval in milliseconds (default: 1000)"
+    echo -e "  -s, --sizes SIZES    Market impact sizes to analyze (comma-separated values)"
+    echo -e "      --depth-example  Run the market depth analysis example"
     echo -e "  -h, --help           Show this help message"
-    echo -e "\nExample:"
+    echo -e "\nExamples:"
     echo -e "  $0 --load high --duration 120 --output results.json --report"
+    echo -e "  $0 --market-depth --interval 500 --sizes \"1.0,5.0,10.0,20.0\""
+    echo -e "  $0 --depth-example"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -66,6 +76,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         -r|--report)
             REPORT=true
+            shift
+            ;;
+        -m|--market-depth)
+            MARKET_DEPTH=true
+            shift
+            ;;
+        -i|--interval)
+            MARKET_DEPTH_INTERVAL="$2"
+            shift 2
+            ;;
+        -s|--sizes)
+            MARKET_IMPACT_SIZES="$2"
+            shift 2
+            ;;
+        --depth-example)
+            COMMAND="market-depth"
             shift
             ;;
         -h|--help)
@@ -117,16 +143,35 @@ if [ "$BENCHMARK" = true ]; then
     # Run benchmark
     echo -e "${GREEN}Running benchmark...${NC}"
     cargo bench
-else
-    # Run simulation
-    echo -e "${GREEN}Running simulation with load level '${LOAD}' for ${DURATION} seconds...${NC}"
+elif [ "$COMMAND" = "market-depth" ]; then
+    # Run market depth example
+    echo -e "${GREEN}Running market depth analysis example...${NC}"
     
     OUTPUT_PARAM=""
     if [ ! -z "$OUTPUT" ]; then
         OUTPUT_PARAM="--output $OUTPUT"
     fi
     
-    cargo run --release -- simulate --load $LOAD --duration $DURATION $OUTPUT_PARAM
+    cargo run --release -- market-depth $OUTPUT_PARAM
+else
+    # Run simulation
+    echo -e "${GREEN}Running simulation with load level '${LOAD}' for ${DURATION} seconds...${NC}"
+    
+    COMMAND_ARGS="simulate --load $LOAD --duration $DURATION"
+    
+    if [ ! -z "$OUTPUT" ]; then
+        COMMAND_ARGS="$COMMAND_ARGS --output $OUTPUT"
+    fi
+    
+    if [ "$MARKET_DEPTH" = true ]; then
+        COMMAND_ARGS="$COMMAND_ARGS --market-depth --market-depth-interval $MARKET_DEPTH_INTERVAL"
+    fi
+    
+    if [ ! -z "$MARKET_IMPACT_SIZES" ]; then
+        COMMAND_ARGS="$COMMAND_ARGS --market-impact-sizes \"$MARKET_IMPACT_SIZES\""
+    fi
+    
+    cargo run --release -- $COMMAND_ARGS
     
     if [ $? -ne 0 ]; then
         echo -e "${RED}Error: Simulation failed.${NC}"
@@ -135,7 +180,7 @@ else
 fi
 
 # Generate report if requested
-if [ "$REPORT" = true ] && [ "$BENCHMARK" = false ]; then
+if [ "$REPORT" = true ] && [ "$BENCHMARK" = false ] && [ "$COMMAND" = "simulate" ]; then
     echo -e "${GREEN}Generating HTML report...${NC}"
     
     REPORT_FILE="${OUTPUT%.json}_report.html"
@@ -204,6 +249,41 @@ if [ "$REPORT" = true ] && [ "$BENCHMARK" = false ]; then
             font-size: 0.8em;
             color: #7f8c8d;
         }
+        .tab {
+            overflow: hidden;
+            border: 1px solid #ccc;
+            background-color: #f1f1f1;
+            border-radius: 5px 5px 0 0;
+        }
+        .tab button {
+            background-color: inherit;
+            float: left;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 14px 16px;
+            transition: 0.3s;
+            font-size: 17px;
+        }
+        .tab button:hover {
+            background-color: #ddd;
+        }
+        .tab button.active {
+            background-color: #3498db;
+            color: white;
+        }
+        .tabcontent {
+            display: none;
+            padding: 6px 12px;
+            border: 1px solid #ccc;
+            border-top: none;
+            border-radius: 0 0 5px 5px;
+            animation: fadeEffect 1s;
+        }
+        @keyframes fadeEffect {
+            from {opacity: 0;}
+            to {opacity: 1;}
+        }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -211,63 +291,154 @@ if [ "$REPORT" = true ] && [ "$BENCHMARK" = false ]; then
     <div class="container">
         <h1>HFT Order Book Simulation Report</h1>
         
-        <div class="card">
-            <h2>Simulation Parameters</h2>
-            <div class="metric">
-                <span class="metric-name">Load Level:</span>
-                <span class="metric-value" id="load-level"></span>
-            </div>
-            <div class="metric">
-                <span class="metric-name">Duration:</span>
-                <span class="metric-value" id="duration"></span>
-            </div>
-            <div class="metric">
-                <span class="metric-name">Timestamp:</span>
-                <span class="metric-value" id="timestamp"></span>
-            </div>
+        <div class="tab">
+            <button class="tablinks" onclick="openTab(event, 'Performance')" id="defaultOpen">Performance</button>
+            <button class="tablinks" onclick="openTab(event, 'MarketDepth')">Market Depth</button>
+            <button class="tablinks" onclick="openTab(event, 'MarketImpact')">Market Impact</button>
         </div>
         
-        <div class="card">
-            <h2>Performance Metrics</h2>
-            <div class="metric">
-                <span class="metric-name">Orders Processed:</span>
-                <span class="metric-value" id="orders-processed"></span>
-            </div>
-            <div class="metric">
-                <span class="metric-name">Orders Per Second:</span>
-                <span class="metric-value" id="orders-per-second"></span>
-            </div>
-            <div class="metric">
-                <span class="metric-name">Memory Usage:</span>
-                <span class="metric-value" id="memory-usage"></span>
-            </div>
-        </div>
-        
-        <div class="card">
-            <h2>Latency Metrics (microseconds)</h2>
-            <div class="metric">
-                <span class="metric-name">Minimum Latency:</span>
-                <span class="metric-value" id="min-latency"></span>
-            </div>
-            <div class="metric">
-                <span class="metric-name">Maximum Latency:</span>
-                <span class="metric-value" id="max-latency"></span>
-            </div>
-            <div class="metric">
-                <span class="metric-name">Average Latency:</span>
-                <span class="metric-value" id="avg-latency"></span>
-            </div>
-            <div class="metric">
-                <span class="metric-name">50th Percentile (P50):</span>
-                <span class="metric-value" id="p50-latency"></span>
-            </div>
-            <div class="metric">
-                <span class="metric-name">99th Percentile (P99):</span>
-                <span class="metric-value" id="p99-latency"></span>
+        <div id="Performance" class="tabcontent">
+            <div class="card">
+                <h2>Simulation Parameters</h2>
+                <div class="metric">
+                    <span class="metric-name">Load Level:</span>
+                    <span class="metric-value" id="load-level"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Duration:</span>
+                    <span class="metric-value" id="duration"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Timestamp:</span>
+                    <span class="metric-value" id="timestamp"></span>
+                </div>
             </div>
             
-            <div class="chart">
-                <canvas id="latency-chart"></canvas>
+            <div class="card">
+                <h2>Performance Metrics</h2>
+                <div class="metric">
+                    <span class="metric-name">Orders Processed:</span>
+                    <span class="metric-value" id="orders-processed"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Orders Per Second:</span>
+                    <span class="metric-value" id="orders-per-second"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Memory Usage:</span>
+                    <span class="metric-value" id="memory-usage"></span>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>Latency Metrics (microseconds)</h2>
+                <div class="metric">
+                    <span class="metric-name">Minimum Latency:</span>
+                    <span class="metric-value" id="min-latency"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Maximum Latency:</span>
+                    <span class="metric-value" id="max-latency"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Average Latency:</span>
+                    <span class="metric-value" id="avg-latency"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">50th Percentile (P50):</span>
+                    <span class="metric-value" id="p50-latency"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">99th Percentile (P99):</span>
+                    <span class="metric-value" id="p99-latency"></span>
+                </div>
+                
+                <div class="chart">
+                    <canvas id="latency-chart"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <div id="MarketDepth" class="tabcontent">
+            <div class="card">
+                <h2>Spread Statistics</h2>
+                <div class="metric">
+                    <span class="metric-name">Minimum Spread:</span>
+                    <span class="metric-value" id="min-spread"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Maximum Spread:</span>
+                    <span class="metric-value" id="max-spread"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Average Spread:</span>
+                    <span class="metric-value" id="avg-spread"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Spread (bps):</span>
+                    <span class="metric-value" id="avg-spread-bps"></span>
+                </div>
+                
+                <div class="chart">
+                    <canvas id="spread-chart"></canvas>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>Liquidity Statistics</h2>
+                <div class="metric">
+                    <span class="metric-name">Average Bid Volume:</span>
+                    <span class="metric-value" id="avg-bid-volume"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Average Ask Volume:</span>
+                    <span class="metric-value" id="avg-ask-volume"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Bid/Ask Ratio:</span>
+                    <span class="metric-value" id="bid-ask-ratio"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Top Level Concentration:</span>
+                    <span class="metric-value" id="top-concentration"></span>
+                </div>
+                
+                <div class="chart">
+                    <canvas id="volume-chart"></canvas>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>Imbalance Statistics</h2>
+                <div class="metric">
+                    <span class="metric-name">Minimum Imbalance:</span>
+                    <span class="metric-value" id="min-imbalance"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Maximum Imbalance:</span>
+                    <span class="metric-value" id="max-imbalance"></span>
+                </div>
+                <div class="metric">
+                    <span class="metric-name">Average Imbalance:</span>
+                    <span class="metric-value" id="avg-imbalance"></span>
+                </div>
+                
+                <div class="chart">
+                    <canvas id="imbalance-chart"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <div id="MarketImpact" class="tabcontent">
+            <div class="card">
+                <h2>Market Impact Analysis</h2>
+                <div id="impact-metrics">
+                    <!-- Market impact metrics will be populated here -->
+                </div>
+                
+                <div class="chart">
+                    <canvas id="impact-chart"></canvas>
+                </div>
             </div>
         </div>
         
@@ -277,6 +448,21 @@ if [ "$REPORT" = true ] && [ "$BENCHMARK" = false ]; then
     </div>
     
     <script>
+        // Tab functionality
+        function openTab(evt, tabName) {
+            var i, tabcontent, tablinks;
+            tabcontent = document.getElementsByClassName("tabcontent");
+            for (i = 0; i < tabcontent.length; i++) {
+                tabcontent[i].style.display = "none";
+            }
+            tablinks = document.getElementsByClassName("tablinks");
+            for (i = 0; i < tablinks.length; i++) {
+                tablinks[i].className = tablinks[i].className.replace(" active", "");
+            }
+            document.getElementById(tabName).style.display = "block";
+            evt.currentTarget.className += " active";
+        }
+        
         // Load the JSON data
         fetch('$(basename $OUTPUT)')
             .then(response => response.json())
@@ -299,8 +485,8 @@ if [ "$REPORT" = true ] && [ "$BENCHMARK" = false ]; then
                 document.getElementById('p99-latency').textContent = data.latency.p99.toFixed(2);
                 
                 // Create latency chart
-                const ctx = document.getElementById('latency-chart').getContext('2d');
-                new Chart(ctx, {
+                const latencyCtx = document.getElementById('latency-chart').getContext('2d');
+                new Chart(latencyCtx, {
                     type: 'bar',
                     data: {
                         labels: ['Min', 'Avg', 'P50', 'P99', 'Max'],
@@ -339,8 +525,223 @@ if [ "$REPORT" = true ] && [ "$BENCHMARK" = false ]; then
                     }
                 });
                 
+                // Populate market depth metrics if available
+                if (data.market_depth) {
+                    const md = data.market_depth;
+                    
+                    // Populate spread statistics
+                    document.getElementById('min-spread').textContent = md.spread_stats.min.toFixed(2);
+                    document.getElementById('max-spread').textContent = md.spread_stats.max.toFixed(2);
+                    document.getElementById('avg-spread').textContent = md.spread_stats.avg.toFixed(2);
+                    document.getElementById('avg-spread-bps').textContent = md.spread_stats.avg_bps.toFixed(2) + ' bps';
+                    
+                    // Create spread chart
+                    const spreadCtx = document.getElementById('spread-chart').getContext('2d');
+                    new Chart(spreadCtx, {
+                        type: 'bar',
+                        data: {
+                            labels: ['Min', 'Avg', 'Max'],
+                            datasets: [{
+                                label: 'Spread',
+                                data: [
+                                    md.spread_stats.min,
+                                    md.spread_stats.avg,
+                                    md.spread_stats.max
+                                ],
+                                backgroundColor: [
+                                    'rgba(46, 204, 113, 0.6)',
+                                    'rgba(52, 152, 219, 0.6)',
+                                    'rgba(231, 76, 60, 0.6)'
+                                ],
+                                borderColor: [
+                                    'rgba(46, 204, 113, 1)',
+                                    'rgba(52, 152, 219, 1)',
+                                    'rgba(231, 76, 60, 1)'
+                                ],
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            scales: {
+                                y: {
+                                    beginAtZero: true
+                                }
+                            }
+                        }
+                    });
+                    
+                    // Populate liquidity statistics
+                    document.getElementById('avg-bid-volume').textContent = md.liquidity_stats.total_bid_volume.toFixed(4);
+                    document.getElementById('avg-ask-volume').textContent = md.liquidity_stats.total_ask_volume.toFixed(4);
+                    document.getElementById('bid-ask-ratio').textContent = md.imbalance_stats.bid_ask_ratio_avg.toFixed(2);
+                    document.getElementById('top-concentration').textContent = (md.liquidity_stats.top_level_concentration * 100).toFixed(2) + '%';
+                    
+                    // Create volume chart
+                    const volumeCtx = document.getElementById('volume-chart').getContext('2d');
+                    new Chart(volumeCtx, {
+                        type: 'bar',
+                        data: {
+                            labels: ['Bid Volume', 'Ask Volume'],
+                            datasets: [{
+                                label: 'Average Volume',
+                                data: [
+                                    md.liquidity_stats.total_bid_volume,
+                                    md.liquidity_stats.total_ask_volume
+                                ],
+                                backgroundColor: [
+                                    'rgba(46, 204, 113, 0.6)',
+                                    'rgba(231, 76, 60, 0.6)'
+                                ],
+                                borderColor: [
+                                    'rgba(46, 204, 113, 1)',
+                                    'rgba(231, 76, 60, 1)'
+                                ],
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            scales: {
+                                y: {
+                                    beginAtZero: true
+                                }
+                            }
+                        }
+                    });
+                    
+                    // Populate imbalance statistics
+                    document.getElementById('min-imbalance').textContent = md.imbalance_stats.min.toFixed(4);
+                    document.getElementById('max-imbalance').textContent = md.imbalance_stats.max.toFixed(4);
+                    document.getElementById('avg-imbalance').textContent = md.imbalance_stats.avg.toFixed(4);
+                    
+                    // Create imbalance chart
+                    const imbalanceCtx = document.getElementById('imbalance-chart').getContext('2d');
+                    new Chart(imbalanceCtx, {
+                        type: 'bar',
+                        data: {
+                            labels: ['Min', 'Avg', 'Max'],
+                            datasets: [{
+                                label: 'Imbalance',
+                                data: [
+                                    md.imbalance_stats.min,
+                                    md.imbalance_stats.avg,
+                                    md.imbalance_stats.max
+                                ],
+                                backgroundColor: [
+                                    'rgba(46, 204, 113, 0.6)',
+                                    'rgba(52, 152, 219, 0.6)',
+                                    'rgba(231, 76, 60, 0.6)'
+                                ],
+                                borderColor: [
+                                    'rgba(46, 204, 113, 1)',
+                                    'rgba(52, 152, 219, 1)',
+                                    'rgba(231, 76, 60, 1)'
+                                ],
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            scales: {
+                                y: {
+                                    beginAtZero: true
+                                }
+                            }
+                        }
+                    });
+                } else {
+                    // Hide market depth tab if data not available
+                    document.querySelector('button[onclick="openTab(event, \'MarketDepth\')"]').style.display = 'none';
+                }
+                
+                // Populate market impact metrics if available
+                if (data.market_impact) {
+                    const mi = data.market_impact;
+                    const container = document.getElementById('impact-metrics');
+                    
+                    // Create metrics for each order size
+                    for (let i = 0; i < mi.order_sizes.length; i++) {
+                        const size = mi.order_sizes[i];
+                        const buy = mi.buy_impact[i];
+                        const sell = mi.sell_impact[i];
+                        
+                        const div = document.createElement('div');
+                        div.classList.add('card');
+                        div.style.marginBottom = '20px';
+                        
+                        div.innerHTML = `
+                            <h3>Order Size: ${size.toFixed(2)}</h3>
+                            <div class="metric">
+                                <span class="metric-name">Buy Execution Price:</span>
+                                <span class="metric-value">${buy.expected_execution_price.toFixed(2)}</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-name">Buy Price Impact:</span>
+                                <span class="metric-value">${buy.expected_price_impact_percent.toFixed(2)}%</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-name">Sell Execution Price:</span>
+                                <span class="metric-value">${sell.expected_execution_price.toFixed(2)}</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-name">Sell Price Impact:</span>
+                                <span class="metric-value">${sell.expected_price_impact_percent.toFixed(2)}%</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-name">Round-trip Cost:</span>
+                                <span class="metric-value">${((buy.expected_execution_price - sell.expected_execution_price) * size).toFixed(2)}</span>
+                            </div>
+                        `;
+                        
+                        container.appendChild(div);
+                    }
+                    
+                    // Create impact chart
+                    const impactCtx = document.getElementById('impact-chart').getContext('2d');
+                    new Chart(impactCtx, {
+                        type: 'bar',
+                        data: {
+                            labels: mi.order_sizes.map(s => s.toFixed(2) + ' BTC'),
+                            datasets: [{
+                                label: 'Buy Price Impact (%)',
+                                data: mi.buy_impact.map(b => b.expected_price_impact_percent),
+                                backgroundColor: 'rgba(46, 204, 113, 0.6)',
+                                borderColor: 'rgba(46, 204, 113, 1)',
+                                borderWidth: 1
+                            }, {
+                                label: 'Sell Price Impact (%)',
+                                data: mi.sell_impact.map(s => s.expected_price_impact_percent),
+                                backgroundColor: 'rgba(231, 76, 60, 0.6)',
+                                borderColor: 'rgba(231, 76, 60, 1)',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    title: {
+                                        display: true,
+                                        text: 'Price Impact (%)'
+                                    }
+                                },
+                                x: {
+                                    title: {
+                                        display: true,
+                                        text: 'Order Size (BTC)'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                } else {
+                    // Hide market impact tab if data not available
+                    document.querySelector('button[onclick="openTab(event, \'MarketImpact\')"]').style.display = 'none';
+                }
+                
                 // Set generation date
                 document.getElementById('generation-date').textContent = new Date().toLocaleString();
+                
+                // Open default tab
+                document.getElementById("defaultOpen").click();
             })
             .catch(error => {
                 console.error('Error loading simulation data:', error);
