@@ -4,6 +4,7 @@ mod order;
 mod price_level;
 mod side;
 pub mod book;  // Make book module public
+pub mod market_depth;
 
 pub use order::{Order, OrderId, OrderType, OrderSide, OrderStatus, TimeInForce};
 pub use price_level::PriceLevel;

@@ -1,11 +1,14 @@
 //! Matching engine for the order book.
 
-use std::collections::VecDeque;
 use serde::{Serialize, Deserialize};
+use smallvec::SmallVec;
 use crate::order_book::{
     OrderBook, Order, OrderId, Price, Quantity, Timestamp, ClientId, 
     OrderSide, OrderType, TimeInForce
 };
+
+/// Maximum number of trades to pre-allocate on the stack
+const MAX_STACK_TRADES: usize = 16;
 
 /// Matching engine configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,24 +66,20 @@ pub struct MatchingEngine {
     order_book: OrderBook,
     /// Configuration
     config: MatchingEngineConfig,
-    /// Queue of orders to process
-    order_queue: VecDeque<Order>,
-    /// List of trades generated
-    trades: Vec<Trade>,
 }
 
 impl MatchingEngine {
     /// Create a new matching engine
+    #[inline]
     pub fn new(order_book: OrderBook, config: MatchingEngineConfig) -> Self {
         Self {
             order_book,
             config,
-            order_queue: VecDeque::new(),
-            trades: Vec::new(),
         }
     }
     
     /// Add a limit order to the book
+    #[inline]
     pub fn add_limit_order(
         &mut self,
         side: OrderSide,
@@ -97,6 +96,7 @@ impl MatchingEngine {
     }
     
     /// Add a market order to the book
+    #[inline]
     pub fn add_market_order(
         &mut self,
         side: OrderSide,
@@ -111,13 +111,16 @@ impl MatchingEngine {
     }
     
     /// Cancel an order
+    #[inline]
     pub fn cancel_order(&mut self, order_id: &OrderId) -> anyhow::Result<Order> {
         self.order_book.cancel_order(order_id).map_err(|e| anyhow::anyhow!(e.to_string()))
     }
     
     /// Match an order
+    #[inline]
     fn match_order(&mut self, order: Order) -> anyhow::Result<MatchResult> {
-        let mut trades = Vec::new();
+        // Use SmallVec to avoid heap allocation for small number of trades
+        let mut trades = SmallVec::<[Trade; MAX_STACK_TRADES]>::new();
         let mut remaining_order = Some(order.clone());
         
         // Check if the order can be matched
@@ -128,7 +131,7 @@ impl MatchingEngine {
                     if order.order_type == OrderType::Market || order.price >= best_ask {
                         // Order can be matched
                         let result = self.match_against_asks(order.clone())?;
-                        trades = result.trades;
+                        trades.extend(result.trades);
                         remaining_order = result.remaining_order;
                     }
                 }
@@ -139,7 +142,7 @@ impl MatchingEngine {
                     if order.order_type == OrderType::Market || order.price <= best_bid {
                         // Order can be matched
                         let result = self.match_against_bids(order.clone())?;
-                        trades = result.trades;
+                        trades.extend(result.trades);
                         remaining_order = result.remaining_order;
                     }
                 }
@@ -147,7 +150,7 @@ impl MatchingEngine {
         }
         
         // Add the remaining order to the book if it's a limit order
-        let final_remaining_order = if let Some(remaining) = remaining_order {
+        let final_remaining_order = if let Some(mut remaining) = remaining_order {
             if remaining.remaining_quantity > 0.0 && remaining.order_type == OrderType::Limit {
                 match remaining.time_in_force {
                     TimeInForce::IOC => None, // IOC orders are canceled if not filled immediately
@@ -160,13 +163,16 @@ impl MatchingEngine {
                     }
                     _ => {
                         // Add to the book
-                        self.order_book.add_limit_order(
+                        let id = self.order_book.add_limit_order(
                             remaining.side,
                             remaining.price,
                             remaining.remaining_quantity,
                             remaining.client_id.clone(),
                             remaining.time_in_force,
                         )?;
+                        
+                        // Update the order ID
+                        remaining.id = id;
                         Some(remaining)
                     }
                 }
@@ -178,78 +184,83 @@ impl MatchingEngine {
         };
         
         Ok(MatchResult {
-            trades,
+            trades: trades.into_vec(),
             remaining_order: final_remaining_order,
         })
     }
     
     /// Match an order against the ask side
+    #[inline]
     fn match_against_asks(&mut self, mut order: Order) -> anyhow::Result<MatchResult> {
-        let mut trades = Vec::new();
+        // Use SmallVec to avoid heap allocation for small number of trades
+        let mut trades = SmallVec::<[Trade; MAX_STACK_TRADES]>::new();
+        
+        // Process up to max_match_orders
+        let mut orders_processed = 0;
         
         // Match until the order is filled or there are no more asks
-        while order.remaining_quantity > 0.0 {
+        while order.remaining_quantity > 0.0 && orders_processed < self.config.max_match_orders {
             if let Some(best_ask) = self.order_book.best_ask() {
                 if order.order_type == OrderType::Limit && order.price < best_ask {
                     // No more matching possible
                     break;
                 }
                 
-                // Get the top ask orders
-                let top_asks = self.order_book.top_asks(1);
-                
-                if top_asks.is_empty() {
-                    // No more asks
-                    break;
-                }
-                
-                let (ask_price, _ask_quantity) = top_asks[0];
-                
-                // Get the ask order
-                let ask_order = self.order_book.get_order(&OrderId(uuid::Uuid::nil()));
-                
-                if ask_order.is_none() {
-                    // No more asks
-                    break;
-                }
-                
-                let mut ask_order = ask_order.unwrap();
-                
-                // Check if self-matching is allowed
-                if !self.config.enable_self_matching && order.client_id == ask_order.client_id {
-                    // Skip this order
-                    continue;
-                }
-                
-                // Calculate the match quantity
-                let match_quantity = order.remaining_quantity.min(ask_order.remaining_quantity);
-                
-                // Create a trade
-                let trade = Trade {
-                    id: uuid::Uuid::new_v4(),
-                    buy_order_id: order.id,
-                    sell_order_id: ask_order.id,
-                    price: ask_price,
-                    quantity: match_quantity,
-                    timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64,
-                    aggressor_side: order.side,
-                };
-                
-                // Update the orders
-                order.remaining_quantity -= match_quantity;
-                ask_order.remaining_quantity -= match_quantity;
-                
-                // Add the trade
-                trades.push(trade);
-                
-                // Update the ask order in the book
-                if ask_order.remaining_quantity <= 0.0 {
-                    // Remove the ask order from the book
-                    self.order_book.cancel_order(&ask_order.id)?;
-                }
-                
-                // Check if we've reached the maximum number of trades
-                if trades.len() >= self.config.max_trades {
+                // Get the next ask order at the best price
+                if let Some(mut ask_order) = self.order_book.next_best_ask() {
+                    orders_processed += 1;
+                    
+                    // Check if self-matching is allowed
+                    if !self.config.enable_self_matching && order.client_id == ask_order.client_id {
+                        // Skip this order and put it back in the book
+                        let _ = self.order_book.add_limit_order(
+                            ask_order.side,
+                            ask_order.price,
+                            ask_order.remaining_quantity,
+                            ask_order.client_id.clone(),
+                            ask_order.time_in_force,
+                        );
+                        continue;
+                    }
+                    
+                    // Calculate the match quantity
+                    let match_quantity = order.remaining_quantity.min(ask_order.remaining_quantity);
+                    
+                    // Create a trade
+                    let trade = Trade {
+                        id: uuid::Uuid::new_v4(),
+                        buy_order_id: order.id,
+                        sell_order_id: ask_order.id,
+                        price: ask_order.price,
+                        quantity: match_quantity,
+                        timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64,
+                        aggressor_side: order.side,
+                    };
+                    
+                    // Update the orders
+                    order.remaining_quantity -= match_quantity;
+                    ask_order.remaining_quantity -= match_quantity;
+                    
+                    // Add the trade
+                    trades.push(trade);
+                    
+                    // If the ask order still has quantity, put it back in the book
+                    if ask_order.remaining_quantity > 0.0 {
+                        let _ = self.order_book.add_limit_order(
+                            ask_order.side,
+                            ask_order.price,
+                            ask_order.remaining_quantity,
+                            ask_order.client_id.clone(),
+                            ask_order.time_in_force,
+                        );
+                    }
+                    
+                    // Check if we've reached the maximum number of trades
+                    if trades.len() >= self.config.max_trades {
+                        break;
+                    }
+                } else {
+                    // No more ask orders at the best price
                     break;
                 }
             } else {
@@ -259,78 +270,83 @@ impl MatchingEngine {
         }
         
         Ok(MatchResult {
-            trades,
+            trades: trades.into_vec(),
             remaining_order: Some(order),
         })
     }
     
     /// Match an order against the bid side
+    #[inline]
     fn match_against_bids(&mut self, mut order: Order) -> anyhow::Result<MatchResult> {
-        let mut trades = Vec::new();
+        // Use SmallVec to avoid heap allocation for small number of trades
+        let mut trades = SmallVec::<[Trade; MAX_STACK_TRADES]>::new();
+        
+        // Process up to max_match_orders
+        let mut orders_processed = 0;
         
         // Match until the order is filled or there are no more bids
-        while order.remaining_quantity > 0.0 {
+        while order.remaining_quantity > 0.0 && orders_processed < self.config.max_match_orders {
             if let Some(best_bid) = self.order_book.best_bid() {
                 if order.order_type == OrderType::Limit && order.price > best_bid {
                     // No more matching possible
                     break;
                 }
                 
-                // Get the top bid orders
-                let top_bids = self.order_book.top_bids(1);
-                
-                if top_bids.is_empty() {
-                    // No more bids
-                    break;
-                }
-                
-                let (bid_price, _bid_quantity) = top_bids[0];
-                
-                // Get the bid order
-                let bid_order = self.order_book.get_order(&OrderId(uuid::Uuid::nil()));
-                
-                if bid_order.is_none() {
-                    // No more bids
-                    break;
-                }
-                
-                let mut bid_order = bid_order.unwrap();
-                
-                // Check if self-matching is allowed
-                if !self.config.enable_self_matching && order.client_id == bid_order.client_id {
-                    // Skip this order
-                    continue;
-                }
-                
-                // Calculate the match quantity
-                let match_quantity = order.remaining_quantity.min(bid_order.remaining_quantity);
-                
-                // Create a trade
-                let trade = Trade {
-                    id: uuid::Uuid::new_v4(),
-                    buy_order_id: bid_order.id,
-                    sell_order_id: order.id,
-                    price: bid_price,
-                    quantity: match_quantity,
-                    timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64,
-                    aggressor_side: order.side,
-                };
-                
-                // Update the orders
-                order.remaining_quantity -= match_quantity;
-                bid_order.remaining_quantity -= match_quantity;
-                
-                // Add the trade
-                trades.push(trade);
-                
-                // Update the bid order in the book
-                if bid_order.remaining_quantity <= 0.0 {
-                    // Remove the bid order from the book
-                    self.order_book.cancel_order(&bid_order.id)?;
-                }
-                
-                // Check if we've reached the maximum number of trades
-                if trades.len() >= self.config.max_trades {
+                // Get the next bid order at the best price
+                if let Some(mut bid_order) = self.order_book.next_best_bid() {
+                    orders_processed += 1;
+                    
+                    // Check if self-matching is allowed
+                    if !self.config.enable_self_matching && order.client_id == bid_order.client_id {
+                        // Skip this order and put it back in the book
+                        let _ = self.order_book.add_limit_order(
+                            bid_order.side,
+                            bid_order.price,
+                            bid_order.remaining_quantity,
+                            bid_order.client_id.clone(),
+                            bid_order.time_in_force,
+                        );
+                        continue;
+                    }
+                    
+                    // Calculate the match quantity
+                    let match_quantity = order.remaining_quantity.min(bid_order.remaining_quantity);
+                    
+                    // Create a trade
+                    let trade = Trade {
+                        id: uuid::Uuid::new_v4(),
+                        buy_order_id: bid_order.id,
+                        sell_order_id: order.id,
+                        price: bid_order.price,
+                        quantity: match_quantity,
+                        timestamp: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64,
+                        aggressor_side: order.side,
+                    };
+                    
+                    // Update the orders
+                    order.remaining_quantity -= match_quantity;
+                    bid_order.remaining_quantity -= match_quantity;
+                    
+                    // Add the trade
+                    trades.push(trade);
+                    
+                    // If the bid order still has quantity, put it back in the book
+                    if bid_order.remaining_quantity > 0.0 {
+                        let _ = self.order_book.add_limit_order(
+                            bid_order.side,
+                            bid_order.price,
+                            bid_order.remaining_quantity,
+                            bid_order.client_id.clone(),
+                            bid_order.time_in_force,
+                        );
+                    }
+                    
+                    // Check if we've reached the maximum number of trades
+                    if trades.len() >= self.config.max_trades {
+                        break;
+                    }
+                } else {
+                    // No more bid orders at the best price
                     break;
                 }
             } else {
@@ -340,7 +356,7 @@ impl MatchingEngine {
         }
         
         Ok(MatchResult {
-            trades,
+            trades: trades.into_vec(),
             remaining_order: Some(order),
         })
     }

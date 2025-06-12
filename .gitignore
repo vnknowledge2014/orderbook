@@ -1,1 +1,6 @@
 /hft-orderbook/target
+fix_errors.sh
+fix_errors2.sh
+fix_errors3.sh
+fix_errors4.sh
+make.sh

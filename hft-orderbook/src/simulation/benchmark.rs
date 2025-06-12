@@ -11,8 +11,6 @@ use colored::*;
 use crate::order_book::{
     OrderBook, Order, OrderType, OrderBookConfig
 };
-use crate::order_book::OrderSide;
-use crate::order_book::TimeInForce;
 use crate::matching_engine::{MatchingEngine, MatchingEngineConfig};
 use crate::simulation::OrderGenerator;
 
